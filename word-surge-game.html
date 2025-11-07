@@ -1,0 +1,331 @@
+        }
+        
+        function renderLetterStyles() {
+            const container = document.getElementById('letter-styles-container');
+            container.innerHTML = '';
+            for (const styleKey in LETTER_STYLES) {
+                const style = LETTER_STYLES[styleKey];
+                const isUnlocked = state.collections.unlockedStyles.includes(style.name);
+                const isEquipped = state.collections.equippedStyle === style.name;
+                
+                const item = document.createElement('div');
+                item.className = `collection-item p-4 rounded-lg cursor-pointer ${isUnlocked ? 'unlocked' : ''} ${isEquipped ? 'equipped' : ''}`;
+                item.innerHTML = `
+                    <div class="letter-tile ${style.class} w-16 h-16 mx-auto flex items-center justify-center text-3xl font-bold text-white">${style.name[0]}</div>
+                    <p class="mt-2 font-bold">${style.name}</p>
+                    <button class="buy-equip-btn btn w-full mt-2 py-1 text-sm" data-style-name="${style.name}"></button>
+                `;
+                
+                const button = item.querySelector('.buy-equip-btn');
+                if (isEquipped) {
+                    button.textContent = 'Equipped';
+                    button.disabled = true;
+                    button.classList.add('bg-green-500');
+                } else if (isUnlocked) {
+                    button.textContent = 'Equip';
+                    button.classList.add('bg-blue-500');
+                } else {
+                    button.textContent = `Buy (${style.cost} Coins)`;
+                    button.classList.add('bg-gray-600');
+                    if (state.coins < style.cost) button.disabled = true;
+                }
+
+                button.onclick = () => handleStyleButtonClick(style);
+                container.appendChild(item);
+            }
+        }
+
+        function handleStyleButtonClick(style) {
+            const isUnlocked = state.collections.unlockedStyles.includes(style.name);
+            if (isUnlocked) {
+                state.collections.equippedStyle = style.name;
+            } else if (state.coins >= style.cost) {
+                state.coins -= style.cost;
+                state.collections.unlockedStyles.push(style.name);
+                state.collections.equippedStyle = style.name;
+                updateHomeHUD();
+            }
+            saveState();
+            renderLetterStyles();
+        }
+
+        function renderWordCards() {
+            const container = document.getElementById('word-cards-container');
+            container.innerHTML = '';
+            for (const cityKey in CITIES) {
+                const city = CITIES[cityKey];
+                if (!state.unlockedCities.includes(city.name)) continue;
+
+                const cityContainer = document.createElement('div');
+                const allCardsFound = city.wordCards.every(card => state.collections.wordCards[card]);
+                
+                let headerColor = allCardsFound ? 'text-green-400' : 'text-gray-300';
+                cityContainer.innerHTML = `<h3 class="font-bold ${headerColor}">${city.name} Landmarks ${allCardsFound ? '(Complete!)' : ''}</h3>`;
+
+                const grid = document.createElement('div');
+                grid.className = 'grid grid-cols-3 gap-2 mt-2';
+                
+                city.wordCards.forEach(cardName => {
+                    const found = state.collections.wordCards[cardName];
+                    const cardEl = document.createElement('div');
+                    cardEl.className = `word-card p-2 rounded text-center text-sm font-semibold ${found ? 'found' : ''}`;
+                    cardEl.textContent = found ? cardName : '???';
+                    grid.appendChild(cardEl);
+                });
+
+                cityContainer.appendChild(grid);
+                container.appendChild(cityContainer);
+            }
+        }
+
+        function selectGameMode(mode) {
+            state.gameMode = mode;
+            if (mode === 'blitz') updateMissionProgress('PLAY_BLITZ');
+            if (mode === 'marathon') updateMissionProgress('PLAY_MARATHON');
+            showScreen(elements.gameScreen);
+            loadNextRound();
+        }
+        
+        function findAnagrams(letters) {
+            const results = { words: new Set(), pangram: null };
+            const uniqueLetters = [...new Set(letters.map(l => l.toLowerCase()))];
+            const letterCounts = {};
+            for (const letter of letters) {
+                const l = letter.toLowerCase();
+                letterCounts[l] = (letterCounts[l] || 0) + 1;
+            }
+            function solve(currentWord, counts) {
+                if (currentWord.length === 2 && commonTwoLetterWords.has(currentWord.toUpperCase())) {
+                    results.words.add(currentWord.toUpperCase());
+                } else if (currentWord.length >= 3 && dictionary.has(currentWord)) {
+                    results.words.add(currentWord.toUpperCase());
+                    if (currentWord.length === uniqueLetters.length) {
+                        const hasAllLetters = uniqueLetters.every(l => currentWord.includes(l));
+                        if (hasAllLetters) results.pangram = currentWord.toUpperCase();
+                    }
+                }
+
+                for (const char in counts) {
+                    if (counts[char] > 0) {
+                        counts[char]--;
+                        solve(currentWord + char, counts);
+                        counts[char]++;
+                    }
+                }
+            }
+            solve('', letterCounts);
+            return results;
+        }
+
+        function generatePuzzle(city) {
+            let puzzle = null;
+            let attempts = 0;
+            let difficultyPool = seedWords.medium;
+            if (state.performanceScore > 5) difficultyPool = seedWords.hard;
+            if (state.performanceScore < -5) difficultyPool = seedWords.easy;
+            const seedSource = CITIES[city].seedWords.concat(difficultyPool);
+
+            while (!puzzle && attempts < 50) {
+                const seed = seedSource[Math.floor(Math.random() * seedSource.length)];
+                const letters = [...new Set(seed.split(''))];
+                const { words, pangram } = findAnagrams(letters);
+                if (words.size > 5 && words.size < 80) {
+                    puzzle = { letters, words, pangram };
+                }
+                attempts++;
+            }
+            if (!puzzle) {
+                const fallbackData = curatedPuzzles[Math.floor(Math.random() * curatedPuzzles.length)];
+                const { words, pangram } = findAnagrams(fallbackData.letters);
+                puzzle = { letters: fallbackData.letters, words, pangram };
+            }
+            return puzzle;
+        }
+
+        function getDailyPuzzle() {
+            const date = new Date();
+            const seed = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+            const prng = () => {
+                let x = Math.sin(seed) * 10000;
+                return x - Math.floor(x);
+            };
+            const dailySeedWords = Object.values(seedWords).flat();
+            const seedWord = dailySeedWords[Math.floor(prng() * dailySeedWords.length)];
+            const letters = [...new Set(seedWord.split(''))];
+            const { words, pangram } = findAnagrams(letters);
+            return { letters, words, pangram };
+        }
+
+        function loadNextRound() {
+            elements.loadingText.textContent = 'Finding all possible words...';
+            showScreen(elements.loadingScreen);
+
+            setTimeout(() => {
+                let puzzle;
+                if (state.gameMode === 'daily') {
+                    const daily = getDailyPuzzle();
+                    puzzle = { letters: daily.letters, anagrams: daily.words, pangram: daily.pangram };
+                } else {
+                    const cityData = CITIES[state.currentCity];
+                    if (!state.playedCuratedPuzzles[state.currentCity]) state.playedCuratedPuzzles[state.currentCity] = [];
+                    const availableCurated = cityData.puzzles.filter((p) => !state.playedCuratedPuzzles[state.currentCity].includes(p.letters.join('')));
+                    
+                    if (availableCurated.length > 0) {
+                        const puzzleData = availableCurated[Math.floor(Math.random() * availableCurated.length)];
+                        state.playedCuratedPuzzles[state.currentCity].push(puzzleData.letters.join(''));
+                        const { words, pangram } = findAnagrams(puzzleData.letters);
+                        puzzle = { letters: puzzleData.letters, anagrams: words, pangram };
+                    } else {
+                        elements.loadingText.textContent = 'Generating a new puzzle...';
+                        const generated = generatePuzzle(state.currentCity);
+                        puzzle = { letters: generated.letters, anagrams: generated.words, pangram: generated.pangram };
+                    }
+                }
+
+                state.allPossibleWords = puzzle.anagrams;
+                state.currentPangram = puzzle.pangram;
+                state.longestWord = [...state.allPossibleWords].sort((a, b) => b.length - a.length)[0] || '';
+                state.foundWords.clear();
+                state.xpThisRound = 0;
+                resetCombo();
+                
+                if (state.gameMode === 'zen' || state.gameMode === 'daily') elements.timerContainer.classList.add('hidden');
+                else elements.timerContainer.classList.remove('hidden');
+
+                renderLetterTiles(puzzle.letters);
+                updateWordsUI();
+                updateHUD();
+                
+                if (state.gameMode === 'blitz' || state.gameMode === 'marathon') startTimer();
+                
+                showScreen(elements.gameScreen);
+            }, 50);
+        }
+
+        function renderLetterTiles(letters) {
+            elements.letterTiles.innerHTML = letters.map((letter, index) => 
+                `<button class="letter-tile w-16 h-16 flex items-center justify-center text-2xl md:text-3xl font-bold text-white rounded-lg" data-letter="${letter}" data-index="${index}">${letter}</button>`
+            ).join('');
+            elements.letterTiles.querySelectorAll('.letter-tile').forEach(tile => tile.onclick = () => handleLetterTap(tile));
+        }
+
+        function handleLetterTap(tile) {
+            if (tile.classList.contains('used')) return;
+            tile.classList.add('used');
+            state.currentGuess.push({ letter: tile.dataset.letter, tile: tile });
+            updateGuessDisplay();
+        }
+
+        function updateGuessDisplay() { elements.currentGuessDisplay.textContent = state.currentGuess.map(g => g.letter).join(''); }
+        
+        function clearGuess() {
+            elements.letterTiles.querySelectorAll('.used').forEach(t => t.classList.remove('used'));
+            state.currentGuess = [];
+            updateGuessDisplay();
+        }
+
+        function startTimer() {
+            clearInterval(state.timerInterval);
+            if (state.gameMode === 'blitz') state.timeRemaining = 15;
+            if (state.gameMode === 'marathon') state.timeRemaining = 60;
+            updateTimerDisplay();
+            state.timerInterval = setInterval(() => {
+                state.timeRemaining--;
+                updateTimerDisplay();
+                if (state.timeRemaining <= 0) endRound();
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            if(elements.timer) {
+                const minutes = Math.floor(state.timeRemaining / 60);
+                const seconds = state.timeRemaining % 60;
+                elements.timer.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
+        
+        function endRound() {
+            clearInterval(state.timerInterval);
+            if (state.gameMode === 'blitz' || state.gameMode === 'marathon') {
+                state.performanceScore -= 1;
+            }
+            showReportCard();
+        }
+
+        function showReportCard() {
+            let bonus = 0;
+            if (state.foundWords.size === state.allPossibleWords.size && state.allPossibleWords.size > 0) {
+                bonus = 50 * state.level;
+                if (state.gameMode === 'zen') updateMissionProgress('PERFECT_ZEN');
+                state.performanceScore += 2;
+            }
+            if (state.gameMode === 'daily' && state.foundWords.size > 0) {
+                state.dailyChallenge.completed = true;
+                bonus += 250;
+            }
+            state.coins += bonus;
+            state.xp += state.xpThisRound;
+            
+            elements.modalLayer.innerHTML = `
+                <div id="report-screen" class="modal game-container w-full max-w-md p-8 rounded-2xl text-center">
+                    <h1 class="text-3xl font-extrabold text-primary-glow mb-4">${bonus > 0 ? "Great Round!" : "Round Over!"}</h1>
+                    <div class="space-y-3 text-left bg-gray-900/50 p-4 rounded-lg">
+                        <div class="flex justify-between items-center text-lg"><span class="font-semibold text-gray-300">Words Found:</span><span class="font-bold text-white">${state.foundWords.size} / ${state.allPossibleWords.size}</span></div>
+                        <div class="flex justify-between items-center text-lg"><span class="font-semibold text-gray-300">XP Earned:</span><span class="font-bold text-primary-glow">+${state.xpThisRound}</span></div>
+                        <div class="flex justify-between items-center text-lg"><span class="font-semibold text-gray-300">Bonus Coins:</span><span class="font-bold text-accent-glow">+${bonus}</span></div>
+                    </div>
+                    <button id="continue-btn" class="btn btn-primary w-full mt-6 py-3">Continue</button>
+                </div>`;
+
+            document.getElementById('continue-btn').onclick = handleContinue;
+            elements.modalLayer.classList.remove('hidden');
+        }
+
+        function handleContinue() {
+            elements.modalLayer.classList.add('hidden');
+            saveState();
+            if (state.xp >= state.xpToNextLevel) {
+                levelUp();
+            } else if (state.gameMode === 'daily') {
+                showHomeScreen();
+            } else {
+                loadNextRound();
+            }
+        }
+
+        function levelUp() {
+            state.level++;
+            state.xp -= state.xpToNextLevel;
+            state.xpToNextLevel = Math.floor(state.xpToNextLevel * 1.5);
+
+            elements.modalLayer.innerHTML = `
+                <div id="level-up-screen" class="modal level-up-modal-bg w-full max-w-md p-8 rounded-2xl text-center relative overflow-hidden">
+                    <canvas id="confetti-canvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+                    <h1 class="text-6xl font-extrabold text-white" style="text-shadow: 0 0 20px black;">LEVEL UP!</h1>
+                    <p class="text-white text-2xl mt-4">You've reached <span class="font-bold">Level ${state.level}</span>!</p>
+                    <p class="text-white/80 mt-2">New challenges await!</p>
+                    <button id="next-round-btn" class="btn bg-white/20 text-white mt-8 px-8 py-3 relative z-10">Awesome!</button>
+                </div>`;
+            
+            runConfetti();
+            document.getElementById('next-round-btn').onclick = () => {
+                elements.modalLayer.classList.add('hidden');
+                if (state.gameMode === 'daily') {
+                    showHomeScreen();
+                } else {
+                    loadNextRound();
+                }
+            };
+            elements.modalLayer.classList.remove('hidden');
+        }
+
+        function checkGuess() {
+            const guessedWord = elements.currentGuessDisplay.textContent;
+            if (!guessedWord) return;
+
+            if (state.foundWords.has(guessedWord)) {
+                elements.message.textContent = 'Already found!';
+                resetCombo();
+            } else if (state.allPossibleWords.has(guessedWord)) {
+                updateCombo();
+(Content truncated due to size limit. Use page ranges or line ranges to read remaining content)
