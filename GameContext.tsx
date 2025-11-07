@@ -334,7 +334,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           newState.timeRemaining = prev.timeRemaining + 10;
           break;
           
-        case 'letterShuffle':
+        case 'shuffle':
           // Letter Shuffle: Randomize letter positions using Fisher-Yates
           const shuffled = [...prev.letters];
           // Perform multiple shuffles to ensure visible change
